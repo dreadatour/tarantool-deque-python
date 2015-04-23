@@ -9,7 +9,7 @@ import threading
 import tarantool
 
 
-TASK_STATUS = {
+TASK_STATE = {
     '~': 'delayed',
     'r': 'ready',
     't': 'taken',
@@ -21,30 +21,29 @@ class Task(object):
     """
     Tarantool deque task wrapper.
     """
-    def __init__(self, tube, task_id, status, data):
+    def __init__(self, tube, task_id, state, data):
         self.tube = tube
         self.deque = tube.deque
         self.task_id = task_id
-        self.status = status
+        self.state = state
         self.data = data
 
     def __str__(self):
-        return "Task (id: {0}, status: {1})".format(self.task_id,
-                                                    self.status_name)
+        return "Task <{0}>: {1}".format(self.task_id, self.state_name)
 
     def __del__(self):
-        if self.status == 't':
+        if self.state == 't':
             try:
                 self.release()
             except self.deque.DatabaseError:
                 pass
 
     @property
-    def status_name(self):
+    def state_name(self):
         """
-        Returns status full name.
+        Returns state full name.
         """
-        return TASK_STATUS.get(self.status, 'UNKNOWN')
+        return TASK_STATE.get(self.state, 'UNKNOWN')
 
     @classmethod
     def create_from_tuple(cls, tube, the_tuple):
@@ -61,7 +60,7 @@ class Task(object):
 
         row = the_tuple[0]
 
-        return cls(tube, task_id=row[0], status=row[1], data=row[2])
+        return cls(tube, task_id=row[0], state=row[1], data=row[2])
 
     def update_from_tuple(self, the_tuple):
         """
@@ -72,20 +71,20 @@ class Task(object):
 
         row = the_tuple[0]
 
-        self.status = row[1]
+        self.state = row[1]
         self.data = row[2]
 
     def ack(self):
         """
         Report task successful execution.
 
-        Returns `True` is task is acked (task status is 'done' now).
+        Returns `True` is task is acked (task state is 'done' now).
         """
         the_tuple = self.deque.ack(self.tube, self.task_id)
 
         self.update_from_tuple(the_tuple)
 
-        return bool(self.status == '-')
+        return bool(self.state == '-')
 
     def release(self, delay=None):
         """
@@ -93,7 +92,7 @@ class Task(object):
 
         May contain a possible new `delay` before the task is executed again.
 
-        Returns `True` is task is released (task status is 'ready'
+        Returns `True` is task is released (task state is 'ready'
         or 'delayed' if `delay` is set now).
         """
         the_tuple = self.deque.release(self.tube, self.task_id, delay=delay)
@@ -101,9 +100,9 @@ class Task(object):
         self.update_from_tuple(the_tuple)
 
         if delay is None:
-            return bool(self.status == 'r')
+            return bool(self.state == 'r')
         else:
-            return bool(self.status == '~')
+            return bool(self.state == '~')
 
     def peek(self):
         """
@@ -127,7 +126,7 @@ class Task(object):
 
         self.update_from_tuple(the_tuple)
 
-        return bool(self.status == '-')
+        return bool(self.state == '-')
 
 
 class Tube(object):
