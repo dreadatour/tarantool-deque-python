@@ -8,7 +8,7 @@ import tarantool
 from tarantool_deque import Deque
 
 
-class SuperTarantoolConnection(tarantool.Connection):
+class YetAnotherTarantoolConnection(tarantool.Connection):
     """
     Overriden tarantool connection.
     """
@@ -75,10 +75,10 @@ class QueueConnectionTestCase(DequeBaseTestCase):
         self.assertIsNotNone(self.deque._tnt)
 
         # set deque custom tarantool connection
-        self.deque.tarantool_connection = SuperTarantoolConnection
-        # deque connection must be `SuperTarantoolConnection` after setup
+        self.deque.tarantool_connection = YetAnotherTarantoolConnection
+        # deque connection must be `YetAnotherTarantoolConnection` after setup
         self.assertEqual(self.deque.tarantool_connection,
-                         SuperTarantoolConnection)
+                         YetAnotherTarantoolConnection)
 
         # deque `_tnt` attribute must be None after setup tarantool connection
         self.assertIsNone(self.deque._tnt)

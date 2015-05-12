@@ -7,6 +7,13 @@ import unittest
 from tarantool_deque import Deque
 
 
+def delay(interval):
+    """
+    Returns current time timestamp + interval delay.
+    """
+    return time.time() + interval
+
+
 class TubeBaseTestCase(unittest.TestCase):
     """
     Base test case for deque tube tests.
@@ -58,14 +65,18 @@ class TubeTestCase(TubeBaseTestCase):
 
     def test_tasks_order(self):
         # put few tasks in tube
-        task11 = self.tube.put('foo')
-        task21 = self.tube.put('bar')
-        task31 = self.tube.put('baz')
+        task11 = self.tube.put('foo', channel=1, msg_type=1)
+        task21 = self.tube.put('bar', channel=1, msg_type=1)
+        task31 = self.tube.put('baz', channel=1, msg_type=1)
 
         # take all these tasks back
         task12 = self.tube.take(timeout=0)
         task22 = self.tube.take(timeout=0)
         task32 = self.tube.take(timeout=0)
+        # tasks were taken
+        self.assertTrue(task12)
+        self.assertTrue(task22)
+        self.assertTrue(task32)
 
         # no tasks left in tube
         self.assertIsNone(self.tube.take(timeout=0))
@@ -93,66 +104,75 @@ class TubeTestCase(TubeBaseTestCase):
 
     def test_task_status(self):
         # put new task in tube
-        task = self.tube.put('foo')
-        # this task status is 'ready'
-        self.assertEqual(task.status, 'r')
-        self.assertEqual(task.status_name, 'ready')
+        task = self.tube.put('foo', channel=1, msg_type=1)
+        # this task state is 'ready'
+        self.assertEqual(task.state, 1)
+        self.assertEqual(task.state_name, 'ready')
 
         # take this task from tube
         task = self.tube.take(timeout=0)
         # task was taken
         self.assertTrue(task)
-        # task status is 'taken'
-        self.assertEqual(task.status, 't')
-        self.assertEqual(task.status_name, 'taken')
+        # task state is 'taken'
+        self.assertEqual(task.state, 2)
+        self.assertEqual(task.state_name, 'taken')
 
         # ack this task
         self.assertTrue(task.ack())
-        # task status is 'done' now
-        self.assertEqual(task.status, '-')
-        self.assertEqual(task.status_name, 'done')
+        # task state is 'done' now
+        self.assertEqual(task.state, 3)
+        self.assertEqual(task.state_name, 'done')
+
+        # no tasks left in tube
+        self.assertIsNone(self.tube.take(timeout=0))
 
     def test_task_status_delayed(self):
-        # put new task in tube set task 'delay' to 0.1 second
-        task = self.tube.put('foo', delay=0.1)
-        # this task status is 'delayed'
-        self.assertEqual(task.status, '~')
-        self.assertEqual(task.status_name, 'delayed')
+        # put new task in tube set task 'to_send_at' to NOW + 0.1 second
+        task = self.tube.put('foo', channel=1, msg_type=1,
+                             to_send_at=delay(0.1))
+        # this task state is 'delayed'
+        self.assertEqual(task.state, 0)
+        self.assertEqual(task.state_name, 'delayed')
 
         # sleep more than 0.1 second - task will be ready soon
         time.sleep(0.2)
 
-        # this task status is 'ready' now
+        # this task state is 'ready' now
         task.peek()
-        self.assertEqual(task.status, 'r')
-        self.assertEqual(task.status_name, 'ready')
+        self.assertEqual(task.state, 1)
+        self.assertEqual(task.state_name, 'ready')
 
         # take this task from tube
         task = self.tube.take(timeout=0)
+        # task state is 'taken'
+        self.assertEqual(task.state, 2)
+        self.assertEqual(task.state_name, 'taken')
+
         # release task and set 'delay' to 0.1 second
         self.assertTrue(task.release(delay=0.1))
-        # this task status is 'delayed'
-        self.assertEqual(task.status, '~')
-        self.assertEqual(task.status_name, 'delayed')
+        # this task state is 'delayed'
+        self.assertEqual(task.state, 0)
+        self.assertEqual(task.state_name, 'delayed')
 
         # sleep more than 0.1 second - task will be ready soon
         time.sleep(0.2)
 
-        # this task status is 'ready' now
+        # this task state is 'ready' now
         task.peek()
-        self.assertEqual(task.status, 'r')
-        self.assertEqual(task.status_name, 'ready')
+        self.assertEqual(task.state, 1)
+        self.assertEqual(task.state_name, 'ready')
 
         # take and ack this task
         self.assertTrue(self.tube.take(timeout=0).ack())
         # no tasks left in tube
         self.assertIsNone(self.tube.take(timeout=0))
 
-    def test_task_put_delay(self):
-        # put new task in tube; set task 'delay' to 0.1 second
-        task = self.tube.put('foo', delay=0.1)
-        # task status is 'delayed'
-        self.assertEqual(task.status, '~')
+    def test_task_put_to_send_at(self):
+        # put new task in tube; set task 'to_send_at' to NOW + 0.1 second
+        task = self.tube.put('foo', channel=1, msg_type=1,
+                             to_send_at=delay(0.1))
+        # task state is 'delayed'
+        self.assertEqual(task.state, 0)
         # no tasks yet in tube (delay is working)
         self.assertIsNone(self.tube.take(timeout=0))
 
@@ -164,53 +184,54 @@ class TubeTestCase(TubeBaseTestCase):
         # no tasks left in tube
         self.assertIsNone(self.tube.take(timeout=0))
 
-    def test_task_put_ttl(self):
-        # put new task in tube; set task 'time to live' to one second
-        self.tube.put('foo', ttl=1)
+    def test_task_put_valid_until(self):
+        # put new task in tube; set task 'valid_until' to NOW + 1 second
+        valid_until = delay(1)
+        self.tube.put('foo', channel=1, msg_type=1, valid_until=valid_until)
         # take and ack this task
         self.assertTrue(self.tube.take(timeout=0).ack())
 
-        # put new task in tube; set task 'time to live' to zero (dead task)
-        self.tube.put('foo', ttl=0)
-        # no tasks will be taken from tube (task is dead)
-        self.assertIsNone(self.tube.take(timeout=0))
-
-        # put new task in tube; set task 'time to live' to 0.1 second (float)
-        self.tube.put('foo', ttl=0.1)
+        # put new task in tube; set task 'valid_until' to NOW + 0.1 second
+        valid_until = delay(0.1)
+        self.tube.put('foo', channel=1, msg_type=1, valid_until=valid_until)
         # sleep more than 0.1 second
         time.sleep(0.2)
-        # no tasks will be taken from tube (task is dead after 'ttl' seconds)
+        # no tasks will be taken (task is dead after 'valid_until' seconds)
         self.assertIsNone(self.tube.take(timeout=0))
 
-        # put new task in tube; set task 'time to live' to 1 second (integer)
-        self.tube.put('foo', ttl=1)
+        # put new task in tube; set task 'to_send_at' to NOW + 1 second
+        valid_until = delay(1)
+        self.tube.put('foo', channel=1, msg_type=1, valid_until=valid_until)
         # sleep more than 1 second
         time.sleep(1.1)
-        # no tasks will be taken from tube (task is dead after 'ttl' seconds)
+        # no tasks will be taken (task is dead after 'valid_until' seconds)
         self.assertIsNone(self.tube.take(timeout=0))
 
-    def test_task_put_ttl_delay(self):
+    def test_task_put_to_send_at_valid_until(self):
         # put new task in tube
-        # set task 'time to live' to 0.2 second and delay to 0.1 second
-        task = self.tube.put('foo', ttl=0.2, delay=0.1)
-        # this task status is 'delayed'
-        self.assertEqual(task.status, '~')
+        # set task 'to_send_at' to 0.1 second and 'valid_until' to 0.2 second
+        to_send_at = delay(0.1)
+        valid_until = delay(0.2)
+        task = self.tube.put('foo', channel=1, msg_type=1,
+                             to_send_at=to_send_at, valid_until=valid_until)
+        # this task state is 'delayed'
+        self.assertEqual(task.state, 0)
 
         # sleep more than 0.1 second, but less, than 0.2 second
         time.sleep(0.15)
 
-        # this task status is 'ready' now
+        # this task state is 'ready' now
         task.peek()
-        self.assertEqual(task.status, 'r')
+        self.assertEqual(task.state, 1)
 
         # sleep more (0.1 second)
         time.sleep(0.15)
 
-        # this task status is dead now (after 'ttl' + 'delay' seconds)
+        # this task state is dead now (after 'to_send_at' + 'valid_until' secs)
         with self.assertRaises(Deque.DatabaseError):
             task.peek()
 
-        # no tasks will be taken (task is dead after 'ttl' + 'delay' seconds)
+        # no tasks will be taken (after 'to_send_at' + 'valid_until' secs)
         self.assertIsNone(self.tube.take(timeout=0))
 
     def test_task_take(self):
@@ -225,12 +246,12 @@ class TubeTestCase(TubeBaseTestCase):
         self.assertTrue(.3 <= time.time() - time_start < .5)
 
         # put new task in tube
-        self.tube.put('foo')
+        self.tube.put('foo', channel=1, msg_type=1)
 
         # take this task from tube
         task = self.tube.take(timeout=0)
-        # this task status is 'taken'
-        self.assertEqual(task.status, 't')
+        # this task state is 'taken'
+        self.assertEqual(task.state, 2)
 
         # no tasks left in tube
         self.assertIsNone(self.tube.take(timeout=0))
@@ -240,33 +261,33 @@ class TubeTestCase(TubeBaseTestCase):
 
     def test_task_ack(self):
         # put new task in tube
-        self.tube.put('foo')
+        self.tube.put('foo', channel=1, msg_type=1)
         # take this task from tube
         task = self.tube.take(timeout=0)
 
         # ack this task
         self.assertTrue(task.ack())
-        # this task status is 'done'
-        self.assertEqual(task.status, '-')
+        # this task state is 'done'
+        self.assertEqual(task.state, 3)
 
         # no tasks left in tube
         self.assertIsNone(self.tube.take(timeout=0))
 
     def test_task_release(self):
         # put new task in tube
-        self.tube.put('foo')
+        self.tube.put('foo', channel=1, msg_type=1)
         # take this task from tube
         task = self.tube.take(timeout=0)
 
         # release task
         self.assertTrue(task.release())
-        # task status is 'ready'
-        self.assertEqual(task.status, 'r')
+        # task state is 'ready'
+        self.assertEqual(task.state, 1)
 
         # take this task from tube
         task = self.tube.take(timeout=0)
-        # this task status is 'taken'
-        self.assertEqual(task.status, 't')
+        # this task state is 'taken'
+        self.assertEqual(task.state, 2)
 
         # ack this task
         self.assertTrue(task.ack())
@@ -275,14 +296,14 @@ class TubeTestCase(TubeBaseTestCase):
 
     def test_task_release_delay(self):
         # put new task in tube
-        self.tube.put('foo')
+        self.tube.put('foo', channel=1, msg_type=1)
         # take this task from tube
         task = self.tube.take(timeout=0)
 
         # release task and set 'delay' to 0.1 second
         self.assertTrue(task.release(delay=0.1))
-        # task status is 'delayed'
-        self.assertEqual(task.status, '~')
+        # task state is 'delayed'
+        self.assertEqual(task.state, 0)
         # no tasks yet in tube (delay is working)
         self.assertIsNone(self.tube.take(timeout=0))
 
@@ -296,22 +317,22 @@ class TubeTestCase(TubeBaseTestCase):
 
     def test_task_peek(self):
         # put new task in tube
-        self.tube.put('foo')
+        self.tube.put('foo', channel=1, msg_type=1)
 
         # take this task from tube
         task = self.tube.take(timeout=0)
-        # task status is now 'taken'
-        self.assertEqual(task.status, 't')
+        # task state is now 'taken'
+        self.assertEqual(task.state, 2)
 
-        # release this task (this way, yes, we need to keep task status)
+        # release this task (this way, yes, we need to keep task state)
         self.deque.release(self.tube, task.task_id)
 
-        # task status is still 'taken'
-        self.assertEqual(task.status, 't')
+        # task state is still 'taken'
+        self.assertEqual(task.state, 2)
         # peek task
         self.assertTrue(task.peek())
-        # task status is now 'ready'
-        self.assertEqual(task.status, 'r')
+        # task state is now 'ready'
+        self.assertEqual(task.state, 1)
 
         # take this task from tube
         task = self.tube.take(timeout=0)
@@ -322,15 +343,15 @@ class TubeTestCase(TubeBaseTestCase):
 
     def test_task_delete(self):
         # put new task in tube
-        self.tube.put('foo')
+        self.tube.put('foo', channel=1, msg_type=1)
         # take this task from tube
         task = self.tube.take(timeout=0)
 
         # delete task
         self.assertTrue(task.delete())
 
-        # task status is 'done'
-        self.assertEqual(task.status, '-')
+        # task state is 'done'
+        self.assertEqual(task.state, 3)
 
         # tack cannot be acked
         with self.assertRaises(Deque.DatabaseError):
@@ -341,7 +362,7 @@ class TubeTestCase(TubeBaseTestCase):
 
     def test_task_destructor(self):
         # put new task in tube
-        task = self.tube.put('foo')
+        task = self.tube.put('foo', channel=1, msg_type=1)
 
         # task is not taken - must not send exception
         task.__del__()

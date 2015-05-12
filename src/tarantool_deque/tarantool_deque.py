@@ -10,10 +10,10 @@ import tarantool
 
 
 TASK_STATE = {
-    '~': 'delayed',
-    'r': 'ready',
-    't': 'taken',
-    '-': 'done',
+    0: 'delayed',
+    1: 'ready',
+    2: 'taken',
+    3: 'done',
 }
 
 
@@ -21,18 +21,27 @@ class Task(object):
     """
     Tarantool deque task wrapper.
     """
-    def __init__(self, tube, task_id, state, data):
+    def __init__(self, tube, task_id, state, next_event, msg_type, obj_type,
+                 obj_id, channel, to_send_at, valid_until, created_at, data):
         self.tube = tube
         self.deque = tube.deque
         self.task_id = task_id
         self.state = state
+        self.next_event = next_event
+        self.msg_type = msg_type
+        self.obj_type = obj_type
+        self.obj_id = obj_id
+        self.channel = channel
+        self._to_send_at = to_send_at
+        self._valid_until = valid_until
+        self._created_at = created_at
         self.data = data
 
     def __str__(self):
         return "Task <{0}>: {1}".format(self.task_id, self.state_name)
 
     def __del__(self):
-        if self.state == 't':
+        if self.state == 2:
             try:
                 self.release()
             except self.deque.DatabaseError:
@@ -44,6 +53,27 @@ class Task(object):
         Returns state full name.
         """
         return TASK_STATE.get(self.state, 'UNKNOWN')
+
+    @property
+    def to_send_at(self):
+        """
+        Returns `to_send_at` timestamp (float).
+        """
+        return self._to_send_at / 10000000
+
+    @property
+    def valid_until(self):
+        """
+        Returns `valid_until` timestamp (float).
+        """
+        return self._valid_until / 10000000
+
+    @property
+    def created_at(self):
+        """
+        Returns `created_at` timestamp (float).
+        """
+        return self._created_at / 10000000
 
     @classmethod
     def create_from_tuple(cls, tube, the_tuple):
@@ -60,7 +90,20 @@ class Task(object):
 
         row = the_tuple[0]
 
-        return cls(tube, task_id=row[0], state=row[1], data=row[2])
+        return cls(
+            tube,
+            task_id=row[0],
+            state=row[1],
+            next_event=row[2],
+            msg_type=row[3],
+            obj_type=row[4],
+            obj_id=row[5],
+            channel=row[6],
+            to_send_at=row[7],
+            valid_until=row[8],
+            created_at=row[9],
+            data=row[10]
+        )
 
     def update_from_tuple(self, the_tuple):
         """
@@ -71,8 +114,19 @@ class Task(object):
 
         row = the_tuple[0]
 
+        if self.task_id != row[0]:
+            raise Deque.BadTupleException("Wrong task: id's are not match")
+
         self.state = row[1]
-        self.data = row[2]
+        self.next_event = row[2]
+        self.msg_type = row[3]
+        self.obj_type = row[4]
+        self.obj_id = row[5]
+        self.channel = row[6]
+        self._to_send_at = row[7]
+        self._valid_until = row[8]
+        self._created_at = row[9]
+        self.data = row[10]
 
     def ack(self):
         """
@@ -84,7 +138,7 @@ class Task(object):
 
         self.update_from_tuple(the_tuple)
 
-        return bool(self.state == '-')
+        return bool(self.state == 3)
 
     def release(self, delay=None):
         """
@@ -100,9 +154,9 @@ class Task(object):
         self.update_from_tuple(the_tuple)
 
         if delay is None:
-            return bool(self.state == 'r')
+            return bool(self.state == 1)
         else:
-            return bool(self.state == '~')
+            return bool(self.state == 0)
 
     def peek(self):
         """
@@ -126,7 +180,7 @@ class Task(object):
 
         self.update_from_tuple(the_tuple)
 
-        return bool(self.state == '-')
+        return bool(self.state == 3)
 
 
 class Tube(object):
@@ -143,20 +197,21 @@ class Tube(object):
         """
         return 'deque.tube.{0}:{1}'.format(self.name, cmd_name)
 
-    def put(self, data, ttl=None, delay=None):
+    def put(self, data, channel, msg_type, obj_type=0, obj_id=0,
+            to_send_at=None, valid_until=None):
         """
         Enqueue a task.
 
         Returns a `Task` object.
         """
         cmd = self.cmd('put')
-        args = (data,)
+        args = (data, channel, msg_type, obj_type, obj_id)
 
         params = dict()
-        if ttl is not None:
-            params['ttl'] = ttl
-        if delay is not None:
-            params['delay'] = delay
+        if to_send_at is not None:
+            params['to_send_at'] = to_send_at
+        if valid_until is not None:
+            params['valid_until'] = valid_until
         if params:
             args += (params,)
 
@@ -225,6 +280,12 @@ class Deque(object):
     class ZeroTupleException(Exception):
         """
         Zero tuple deque exception.
+        """
+        pass
+
+    class BadTupleException(Exception):
+        """
+        Bad tuple deque exception.
         """
         pass
 
@@ -361,7 +422,7 @@ class Deque(object):
         args = (task_id,)
 
         if delay is not None:
-            args += ({'delay': delay},)
+            args += (delay,)
 
         return self.tnt.call(cmd, args)
 
